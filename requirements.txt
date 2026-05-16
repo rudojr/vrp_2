@@ -1,0 +1,5 @@
+# MOGVRPTW-TV Python dependencies
+# No heavy external libs required — pure Python stdlib only.
+# Optional: install for faster runs / visualization
+numpy>=1.24       # optional, not required by current code
+matplotlib>=3.7   # optional, for plotting Pareto fronts
