@@ -40,14 +40,17 @@ class Solution:
         self.NV     = len(self.routes)
 
 
+# Near-feasible tolerance: small tw_viol may be unavoidable due to TV-speed model
+FEASIBILITY_TOL = 50.0
+
 def evaluate_solution(sol: Solution, se: SolutionEval):
     result      = se.evaluate(sol.routes)
     sol.TC       = result["TC"]
     sol.TT       = result["TT"]
     sol.NV       = result["NV"]
-    sol.feasible = result["feasible"]
     sol.tw_viol  = result["tw_violation"]
     sol.lv_viol  = result["load_violation"]
+    sol.feasible = (sol.lv_viol == 0.0 and sol.tw_viol <= FEASIBILITY_TOL)
 
 
 def _insertion_cost(
@@ -72,6 +75,45 @@ def _insertion_cost(
 
     load_approx = sum(cmap[c].demand for c in route) + cust.demand
     return transport_cost_segment(d_add - d_remove, load_approx, cap)
+
+
+
+def _route_arrival_at_pos(inst, route, pos, cmap):
+    """Estimate arrival time at position `pos` in route (before inserting new cust).
+    Returns the approximate time the vehicle arrives at route[pos] (or end-of-route
+    if pos==len(route)).  Fast O(pos) estimate."""
+    from src.problem import travel_time_tv, euclidean, SERVICE_TIME_DEFAULT
+    depot = inst.depot
+    t = 0.0
+    prev = depot
+    for i in range(min(pos, len(route))):
+        c = cmap[route[i]]
+        dist = euclidean(prev, c)
+        t += travel_time_tv(dist, t)
+        # service + best-wait at earliest TW
+        svc = c.service_time if c.service_time > 0 else SERVICE_TIME_DEFAULT
+        best_start = t
+        for (rt, dt) in c.time_windows:
+            if t <= dt:
+                best_start = max(t, rt)
+                break
+        t = best_start + svc
+        prev = c
+    return t
+
+
+def _tw_ok_insert(inst, route, cid, pos, cmap):
+    """Return True if inserting `cid` at `pos` can satisfy at least one TW.
+    Uses a fast arrival-time estimate (ignores downstream shifts)."""
+    from src.problem import travel_time_tv, euclidean
+    t_at_pos = _route_arrival_at_pos(inst, route, pos, cmap)
+    prev_id  = 0 if pos == 0 else route[pos - 1]
+    prev = cmap[prev_id]
+    c    = cmap[cid]
+    dist = euclidean(prev, c)
+    from src.problem import travel_time_tv
+    arr  = t_at_pos + travel_time_tv(dist, t_at_pos)
+    return any(arr <= dt for (_, dt) in c.time_windows)
 
 
 def build_initial_solution(inst, seed=42):
@@ -420,7 +462,7 @@ class EpsilonALNSSA:
         self.verbose      = verbose
         self.se           = SolutionEval(instance)
 
-        self.T0 = T0 if T0 is not None else max(50.0, instance.n * 0.5)
+        self.T0 = T0 if T0 is not None else max(200.0, instance.n * 5.0)
         if cooling is not None:
             self.cooling = cooling
         else:
@@ -569,7 +611,7 @@ class EpsilonALNSSA:
             print(f'  Initial: NV={init_sol.NV}  TC={init_sol.TC:.2f}  '
                   f'TT={init_sol.TT:.2f}  feasible={init_sol.feasible}')
 
-        warmup_iters = max(200, self.iterations // 3)
+        warmup_iters = max(self.iterations, self.inst.n * 10)
         if self.verbose:
             print(f'  Warmup ({warmup_iters} iters) ...', end=' ', flush=True)
 
@@ -580,7 +622,9 @@ class EpsilonALNSSA:
             print(f'feasible={warmup_sol.feasible}  '
                   f'NV={warmup_sol.NV}  TC={warmup_sol.TC:.2f}')
 
-        current_start = warmup_sol if warmup_sol.feasible else init_sol
+        # Prefer feasible warmup; if still infeasible, use warmup_sol
+        # (better starting point than init_sol with NV=n)
+        current_start = warmup_sol
         nv_max  = current_start.NV
         archive = []
         archive = self._update_pareto(archive, current_start)

@@ -93,6 +93,7 @@ def run_experiment(
     verbose:       bool  = True,
     save_results:  bool  = True,
     output_dir:    str   = "results_alns",
+    summary_name:  str   = "summary.csv",
 ) -> Dict[str, list]:
 
     out_path = Path(output_dir)
@@ -201,7 +202,7 @@ def run_experiment(
                   f"Time={ct_m:.2f}s+/-{ct_s:.2f}s")
 
     if save_results and all_rows:
-        summary_path = out_path / "summary.csv"
+        summary_path = out_path / summary_name
         with open(summary_path, "w", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=all_rows[0].keys())
             writer.writeheader()
@@ -241,6 +242,8 @@ def parse_args():
                         help="Initial SA temperature (default: auto)")
     parser.add_argument("--output", "-o", default="results_alns",
                         help="Output directory (default: results_alns/)")
+    parser.add_argument("--summary-name", default="summary.csv",
+                        help="Summary CSV filename (default: summary.csv)")
     parser.add_argument("--quiet", "-q", action="store_true",
                         help="Suppress per-epsilon verbose output")
 
@@ -285,6 +288,17 @@ if __name__ == "__main__":
     else:
         instance_keys = args.instances
 
+    # Sort by SIZE (numeric) then ID for predictable run order
+    def _sort_key(k):
+        try:
+            part = k.split("_")[0]          # e.g. "C80"
+            size = int(''.join(filter(str.isdigit, part)))
+            iid  = int(k.split("_")[1])
+            return (size, iid)
+        except Exception:
+            return (0, 0)
+    instance_keys = sorted(instance_keys, key=_sort_key)
+
     print(f"\nEps-ALNS-SA solver  |  instances={instance_keys}")
     print(f"  iterations={args.iter}  remove_pct={args.remove:.0%}  "
           f"runs={args.runs}  T0={'auto' if args.T0 is None else args.T0}")
@@ -298,4 +312,5 @@ if __name__ == "__main__":
         verbose=not args.quiet,
         save_results=True,
         output_dir=args.output,
+        summary_name=args.summary_name,
     )
