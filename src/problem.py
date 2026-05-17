@@ -1,78 +1,38 @@
-"""
-Problem model for MOGVRPTW-TV.
-
-Objectives:
-    1. TC  — Total Transportation Cost
-             = fixed vehicle cost + variable distance/fuel cost
-    2. TT  — Total Travel Time (including waiting + service)
-    3. NV  — Number of Vehicles used
-
-Time-Varying speed model (BPR-style, 3 congestion periods):
-    Period 0: [0,    480)  free-flow  → speed_factor = 1.0
-    Period 1: [480,  720)  peak-hour  → speed_factor = 0.6   (congestion)
-    Period 2: [720,  960]  off-peak   → speed_factor = 0.8
-
-Green fuel / emission model (Comprehensive Modal Emissions, simplified):
-    fuel_per_km = alpha + beta * (load / capacity)
-    where alpha, beta are calibrated constants.
-
-Penalty for time-window violations: large M per unit of violation.
-"""
-
 import math
 from typing import List, Tuple, Optional
 from src.data_loader import Customer, Instance
 
 
-# ---------------------------------------------------------------------------
-# Constants (can be tuned)
-# ---------------------------------------------------------------------------
-
-FIXED_VEHICLE_COST  = 100.0    # cost per vehicle dispatched
-COST_PER_KM         = 1.0      # base transport cost
-FUEL_ALPHA          = 0.0761   # idle fuel rate  (L / km)
-FUEL_BETA           = 0.0004   # load-dependent  (L / km / kg)
-FUEL_COST_PER_LITRE = 1.5      # $/L
+FIXED_VEHICLE_COST  = 100.0   
+COST_PER_KM         = 1.0      
+FUEL_ALPHA          = 0.0761   
+FUEL_BETA           = 0.0004  
+FUEL_COST_PER_LITRE = 1.5      
 EMISSION_PER_LITRE  = 2.62     # kg CO₂ / L
 EMISSION_COST       = 0.05     # $/kg CO₂  (carbon price)
 SERVICE_TIME_DEFAULT = 10.0    # minutes (used when dataset doesn't specify)
 
-# Time-varying speed zones: (start, end, speed_factor)
 TV_ZONES: List[Tuple[float, float, float]] = [
     (0.0,   480.0, 1.0),   # free-flow
     (480.0, 720.0, 0.6),   # morning peak
     (720.0, 960.0, 0.8),   # afternoon / off-peak
 ]
 
-BASE_SPEED = 1.0   # normalised: distance unit / time unit
-
-
-# ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
-
+BASE_SPEED = 1.0  
 def euclidean(a: Customer, b: Customer) -> float:
     return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
 
 
 def travel_time_tv(dist: float, depart_time: float) -> float:
-    """
-    Compute travel time over `dist` starting at `depart_time`,
-    accounting for time-varying speed zones.
-
-    We integrate progress through the distance as time advances.
-    Returns the travel time (minutes).
-    """
     if dist <= 0.0:
         return 0.0
 
     remaining = dist
     t = depart_time
 
-    # Iterate through speed zones
     for (z_start, z_end, factor) in TV_ZONES:
         if t >= z_end:
-            continue                    # already past this zone
+            continue                    
         if remaining <= 0.0:
             break
 
@@ -98,13 +58,11 @@ def travel_time_tv(dist: float, depart_time: float) -> float:
 
 
 def fuel_consumption(dist: float, load: float, capacity: float) -> float:
-    """Comprehensive Modal Emission-inspired fuel model (L)."""
     load_ratio = min(load / capacity, 1.0)
     return (FUEL_ALPHA + FUEL_BETA * load_ratio) * dist
 
 
 def transport_cost_segment(dist: float, load: float, capacity: float) -> float:
-    """Full segment cost = distance cost + fuel/emission cost."""
     fuel = fuel_consumption(dist, load, capacity)
     return (
         COST_PER_KM * dist
@@ -113,12 +71,7 @@ def transport_cost_segment(dist: float, load: float, capacity: float) -> float:
     )
 
 
-# ---------------------------------------------------------------------------
-# Route / Solution evaluation
-# ---------------------------------------------------------------------------
-
 class RouteEval:
-    """Evaluates a single route for feasibility and objectives."""
 
     def __init__(self, instance: Instance):
         self.inst = instance
@@ -128,11 +81,6 @@ class RouteEval:
         route: List[int],           # customer indices (1-based, no depot)
         return_details: bool = False
     ) -> dict:
-        """
-        Evaluate one route.  `route` is a list of customer IDs (not indices).
-        Returns dict with: cost, travel_time, feasible, load_violation,
-                           tw_violation, arrival_times.
-        """
         inst      = self.inst
         depot     = inst.depot
         cap       = inst.vehicle_capacity
@@ -219,8 +167,6 @@ class RouteEval:
 
 
 class SolutionEval:
-    """Evaluates a complete solution (list of routes)."""
-
     def __init__(self, instance: Instance):
         self.re = RouteEval(instance)
         self.inst = instance

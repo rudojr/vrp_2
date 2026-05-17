@@ -180,20 +180,22 @@ def run_experiment(
 
             elapsed = time.time() - t0
             summary = summarise_pareto(pareto)
-            summary["elapsed_s"] = elapsed
-            summary["run"]       = run_idx + 1
-            summary["instance"]  = key
+            summary["computing_time_s"] = round(elapsed, 4)
+            summary["run"]              = run_idx + 1
+            summary["instance"]         = key
             run_summaries.append(summary)
 
-            print(f"\n  [OK] Done in {elapsed:.1f}s | Pareto={summary['pareto_size']}")
+            mins, secs = divmod(elapsed, 60)
+            time_str = f"{int(mins)}m{secs:.1f}s" if mins >= 1 else f"{elapsed:.2f}s"
+            print(f"\n  [OK] Done in {time_str} | Pareto={summary['pareto_size']}")
             print(f"    TC_min={summary['TC_min']:.2f}  "
                   f"TT_min={summary['TT_min']:.2f}  "
                   f"NV_min={summary['NV_min']}")
             print(f"    [MinNV solution] TC={summary['TC_at_minNV']:.2f}  "
                   f"TT={summary['TT_at_minNV']:.2f}  "
                   f"NV={summary['NV']}")
+            print(f"    Computing time  : {time_str}")
 
-            # Save history CSV per run
             if save_results:
                 hist_path = out_path / f"{key}_run{run_idx+1}_history.csv"
                 with open(hist_path, "w", newline="") as f:
@@ -208,15 +210,18 @@ def run_experiment(
     print(f"\n\n{'='*72}")
     print(f"{'RESULTS SUMMARY':^72}")
     print(f"{'='*72}")
-    header = f"{'Instance':<12} {'Run':>4} {'TC':>10} {'TT':>10} {'NV':>5} {'Time(s)':>8}"
+    header = f"{'Instance':<12} {'Run':>4} {'TC':>10} {'TT':>10} {'NV':>5} {'Time':>10}"
     print(header)
     print("-" * 72)
     for row in all_rows:
+        ct = row['computing_time_s']
+        mins, secs = divmod(ct, 60)
+        time_str = f"{int(mins)}m{secs:.1f}s" if mins >= 1 else f"{ct:.2f}s"
         print(f"{row['instance']:<12} {row['run']:>4} "
               f"{row['TC_at_minNV']:>10.2f} "
               f"{row['TT_at_minNV']:>10.2f} "
               f"{row['NV']:>5} "
-              f"{row['elapsed_s']:>8.1f}")
+              f"{time_str:>10}")
     print("=" * 72)
 
     # Aggregate (if multiple runs)
@@ -225,18 +230,22 @@ def run_experiment(
         print("-" * 72)
         import statistics
         for key, summaries in results.items():
-            tc_vals = [s["TC_at_minNV"] for s in summaries]
-            tt_vals = [s["TT_at_minNV"] for s in summaries]
-            nv_vals = [s["NV"]          for s in summaries]
+            tc_vals = [s["TC_at_minNV"]       for s in summaries]
+            tt_vals = [s["TT_at_minNV"]       for s in summaries]
+            nv_vals = [s["NV"]                for s in summaries]
+            ct_vals = [s["computing_time_s"]  for s in summaries]
             tc_m  = statistics.mean(tc_vals)
             tt_m  = statistics.mean(tt_vals)
             nv_m  = statistics.mean(nv_vals)
+            ct_m  = statistics.mean(ct_vals)
             tc_s  = statistics.stdev(tc_vals) if len(tc_vals) > 1 else 0
             tt_s  = statistics.stdev(tt_vals) if len(tt_vals) > 1 else 0
             nv_s  = statistics.stdev(nv_vals) if len(nv_vals) > 1 else 0
+            ct_s  = statistics.stdev(ct_vals) if len(ct_vals) > 1 else 0
             print(f"{key:<12} TC={tc_m:.2f}±{tc_s:.2f}  "
                   f"TT={tt_m:.2f}±{tt_s:.2f}  "
-                  f"NV={nv_m:.1f}±{nv_s:.1f}")
+                  f"NV={nv_m:.1f}±{nv_s:.1f}  "
+                  f"Time={ct_m:.2f}s±{ct_s:.2f}s")
 
     # Save summary CSV
     if save_results and all_rows:

@@ -1,30 +1,13 @@
-"""
-NSGA-II implementation for MOGVRPTW-TV.
-
-Chromosome: permutation of customer IDs, split into routes by
-            a Giant Tour representation with depot-separation genes.
-
-Objectives (3):  TC, TT, NV  → minimise all three.
-"""
-
 import random
 import math
 import copy
+import time
 from typing import List, Tuple, Dict, Any, Optional
 
 from src.problem import SolutionEval, RouteEval
 from src.data_loader import Instance
 
-
-# ---------------------------------------------------------------------------
-# Representation helpers
-# ---------------------------------------------------------------------------
-
 def decode_giant_tour(giant: List[int], instance: Instance) -> List[List[int]]:
-    """
-    Split a giant tour into feasible routes using a greedy split decoder.
-    Respects vehicle capacity only (time windows checked post-hoc).
-    """
     cap      = instance.vehicle_capacity
     cust_map = {c.id: c for c in instance.customers}
 
@@ -54,7 +37,7 @@ def decode_giant_tour(giant: List[int], instance: Instance) -> List[List[int]]:
 class Individual:
     def __init__(self, giant: List[int]):
         self.giant = giant
-        self.objectives: List[float] = []   # [TC_penalised, TT_penalised, NV]
+        self.objectives: List[float] = []  
         self.rank      = 0
         self.crowding  = 0.0
         self.routes: List[List[int]] = []
@@ -83,12 +66,11 @@ def evaluate_individual(ind: Individual, se: SolutionEval, instance: Instance):
     ind.raw_tt  = result["TT"]
     ind.raw_nv  = result["NV"]
     ind.feasible = result["feasible"]
-    # Penalty only applied to TC and TT (not NV, to keep it meaningful)
     penalty = (result["load_violation"] + result["tw_violation"]) * 1000.0
     ind.objectives = [
         result["TC"] + penalty,
         result["TT"] + penalty,
-        float(result["NV"]),          # NV never penalised
+        float(result["NV"]),          
     ]
 
 
@@ -100,7 +82,6 @@ def dominates(a: List[float], b: List[float]) -> bool:
 
 
 def non_dominated_sort(population: List[Individual]) -> List[List[int]]:
-    """Fast non-dominated sorting. Returns list of fronts (indices)."""
     n = len(population)
     dominated_count = [0] * n
     dominators      = [[] for _ in range(n)]
@@ -170,13 +151,7 @@ def tournament_select(population: List[Individual], k: int = 2) -> Individual:
             best = c
     return best
 
-
-# ---------------------------------------------------------------------------
-# Genetic operators
-# ---------------------------------------------------------------------------
-
 def order_crossover(p1: List[int], p2: List[int]) -> List[int]:
-    """OX crossover."""
     n  = len(p1)
     a, b = sorted(random.sample(range(n), 2))
     child = [-1] * n
@@ -209,7 +184,6 @@ def inversion_mutation(giant: List[int], rate: float = 0.05) -> List[int]:
 
 
 def or_opt_mutation(giant: List[int], rate: float = 0.05) -> List[int]:
-    """Move a random segment of length 1-3 to a random position."""
     if random.random() < rate:
         giant = giant[:]
         n  = len(giant)
@@ -262,10 +236,7 @@ class NSGAII:
     # ---- main loop ----
 
     def run(self) -> Tuple[List[Individual], List[dict]]:
-        """
-        Returns (pareto_front, history).
-        history: list of dicts with generation stats.
-        """
+        t_start    = time.time()
         population = self._init_population()
         history    = []
 
@@ -274,7 +245,6 @@ class NSGAII:
             crowding_distance(f, population)
 
         for gen in range(self.generations):
-            # Generate offspring
             offspring = []
             while len(offspring) < self.pop_size:
                 p1 = tournament_select(population)
@@ -293,7 +263,6 @@ class NSGAII:
                 evaluate_individual(child, self.se, self.instance)
                 offspring.append(child)
 
-            # Combine and select
             combined = population + offspring
             fronts   = non_dominated_sort(combined)
 
@@ -314,7 +283,6 @@ class NSGAII:
 
             population = new_pop
 
-            # Stats — use raw values for readability
             front0 = [ind for ind in population if ind.rank == 0]
             tc_vals = [ind.raw_tc for ind in front0]
             tt_vals = [ind.raw_tt for ind in front0]
@@ -328,6 +296,7 @@ class NSGAII:
                 "TT_min": min(tt_vals) if tt_vals else float("nan"),
                 "TT_avg": sum(tt_vals) / len(tt_vals) if tt_vals else float("nan"),
                 "NV_min": int(min(nv_vals)) if nv_vals else 0,
+                "elapsed_s": round(time.time() - t_start, 4),
             }
             history.append(stat)
 
@@ -335,8 +304,8 @@ class NSGAII:
                 print(f"  Gen {gen+1:4d} | Pareto={stat['pareto_size']:3d} | "
                       f"TC_min={stat['TC_min']:8.1f} | "
                       f"TT_min={stat['TT_min']:8.1f} | "
-                      f"NV_min={stat['NV_min']:3d}")
+                      f"NV_min={stat['NV_min']:3d} | "
+                      f"Time={stat['elapsed_s']:.2f}s")
 
-        # Return Pareto front
         pareto = [ind for ind in population if ind.rank == 0]
         return pareto, history

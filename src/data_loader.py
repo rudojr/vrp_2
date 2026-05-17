@@ -1,26 +1,8 @@
-"""
-Data loader for MOGVRPTW-TV instances.
-
-Solomon datasets: CSV format with multiple time windows (MTW)
-    Columns: CUST_NO, XCOORD, YCOORD, DEMAND,
-             READY_TIME_1, DUE_TIME_1,
-             READY_TIME_2, DUE_TIME_2,
-             READY_TIME_3, DUE_TIME_3
-
-Homberger datasets: TXT format (standard VRPTW layout)
-    No MTW; single time window per customer.
-"""
-
 import csv
 import os
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
-
-
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Customer:
@@ -29,7 +11,6 @@ class Customer:
     y: float
     demand: float
     service_time: float = 0.0
-    # Multiple time windows: list of (ready_time, due_time) pairs
     time_windows: List[Tuple[float, float]] = field(default_factory=list)
 
     @property
@@ -60,13 +41,7 @@ class Instance:
     def n(self) -> int:
         return len(self.customers)
 
-
-# ---------------------------------------------------------------------------
-# Solomon loader (CSV + Multiple Time Windows)
-# ---------------------------------------------------------------------------
-
 def load_solomon(filepath: str) -> Instance:
-    """Parse a Solomon *_MTW.csv file."""
     name = os.path.splitext(os.path.basename(filepath))[0]
     customers: List[Customer] = []
     depot: Optional[Customer] = None
@@ -92,7 +67,6 @@ def load_solomon(filepath: str) -> Instance:
 
     assert depot is not None, f"No depot (CUST_NO=0) found in {filepath}"
 
-    # Solomon standard: 25 vehicles, capacity 200
     return Instance(
         name=name,
         dataset_type="solomon",
@@ -103,20 +77,7 @@ def load_solomon(filepath: str) -> Instance:
     )
 
 
-# ---------------------------------------------------------------------------
-# Homberger loader (TXT, standard format)
-# ---------------------------------------------------------------------------
-
 def load_homberger(filepath: str) -> Instance:
-    """
-    Parse a Homberger .TXT file.
-
-    Format:
-        line 1   : instance name
-        line 3-5 : VEHICLE / NUMBER  CAPACITY
-        line 7   : CUSTOMER header
-        line 9+  : CUST NO.  XCOORD.  YCOORD.  DEMAND  READY TIME  DUE DATE  SERVICE TIME
-    """
     name = os.path.splitext(os.path.basename(filepath))[0]
     customers: List[Customer] = []
     depot: Optional[Customer] = None
@@ -124,12 +85,10 @@ def load_homberger(filepath: str) -> Instance:
     with open(filepath, encoding="utf-8") as fh:
         lines = fh.readlines()
 
-    # Parse vehicle info from line index 4 (0-based)
     vehicle_line = lines[4].split()
     max_vehicles = int(vehicle_line[0])
     capacity     = float(vehicle_line[1])
 
-    # Data lines start after the header row (index 8, 0-based)
     for line in lines[9:]:
         line = line.strip()
         if not line:
@@ -164,11 +123,6 @@ def load_homberger(filepath: str) -> Instance:
         depot=depot,
         customers=customers,
     )
-
-
-# ---------------------------------------------------------------------------
-# Auto-detect & load
-# ---------------------------------------------------------------------------
 
 def load_instance(filepath: str) -> Instance:
     ext = os.path.splitext(filepath)[1].lower()
