@@ -1,0 +1,2 @@
+TC_min,TT_min,NV_min,TC_at_minNV,TT_at_minNV,NV,TC_avg,TT_avg,NV_avg,pareto_size,computing_time_s,run,instance
+344682.5788,268084.7416,800,344682.5788,268084.7416,800,344682.5788,268084.7416,800.0,3,897.6947,1,H_C1_800_1

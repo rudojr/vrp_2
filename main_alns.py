@@ -70,7 +70,6 @@ def _build_solomon_registry() -> Dict[str, Tuple[Path, int]]:
 HOMBERGER_TYPES    = ["C1", "C2", "R1", "R2", "RC1", "RC2"]
 HOMBERGER_VARIANTS = list(range(1, 11))   # 10 instances per folder
 
-# scale -> folder_size (source file to read from)
 HOMBERGER_SCALE_TO_FOLDER = {
     100: 200,   # take first 100 from 200-customer file
     200: 200,   # use all 200
