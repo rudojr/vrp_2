@@ -1,56 +1,79 @@
-"""
-Patch: Revert TW-check in repair operators (too expensive).
-Keep only the soft feasibility fix (FEASIBILITY_TOL=50).
-Also reduce warmup_iters formula: max(iter, n*10) instead of n*30.
-"""
-with open('src/alns_sa.py', 'r', encoding='utf-8') as f:
+"""Patch: replace Homberger registry with scale-based design."""
+
+NEW_HOMBERGER = '''# ---------------------------------------------------------------------------
+# Homberger registry
+#
+# Key format:  H_<TYPE>_<SCALE>_<VARIANT>
+#   TYPE    : C1 | C2 | R1 | R2 | RC1 | RC2
+#   SCALE   : 100 | 200 | 400 | 600 | 800  (customers to USE)
+#   VARIANT : 1 .. 10  (instance number within folder)
+#
+# Source file mapping (smallest folder that fits the scale):
+#   SCALE 100 -> homberger_200_customer_instances  (take first 100)
+#   SCALE 200 -> homberger_200_customer_instances  (use all 200)
+#   SCALE 400 -> homberger_400_customer_instances  (use all 400)
+#   SCALE 600 -> homberger_600_customer_instances  (use all 600)
+#   SCALE 800 -> homberger_800_customer_instances  (use all 800)
+#
+# Examples:
+#   H_C1_100_1  -> C1_2_1.TXT (200-cust folder), first 100 customers
+#   H_C1_200_1  -> C1_2_1.TXT (200-cust folder), all 200 customers
+#   H_R1_400_3  -> R1_4_3.TXT (400-cust folder), all 400 customers
+#   H_RC2_800_5 -> RC2_8_5.TXT (800-cust folder), all 800 customers
+# ---------------------------------------------------------------------------
+
+HOMBERGER_TYPES    = ["C1", "C2", "R1", "R2", "RC1", "RC2"]
+HOMBERGER_VARIANTS = list(range(1, 11))   # 10 instances per folder
+
+# scale -> folder_size (source file to read from)
+HOMBERGER_SCALE_TO_FOLDER = {
+    100: 200,   # take first 100 from 200-customer file
+    200: 200,   # use all 200
+    400: 400,   # use all 400
+    600: 600,   # use all 600
+    800: 800,   # use all 800
+}
+
+
+def _homberger_file(htype, folder_n, variant):
+    size_code = folder_n // 100
+    subdir    = f"homberger_{folder_n}_customer_instances"
+    filename  = f"{htype}_{size_code}_{variant}.TXT"
+    return HOMBERGER_DIR / subdir / filename
+
+
+def _build_homberger_registry():
+    reg = {}
+    for htype in HOMBERGER_TYPES:
+        for scale, folder_n in HOMBERGER_SCALE_TO_FOLDER.items():
+            for v in HOMBERGER_VARIANTS:
+                fpath = _homberger_file(htype, folder_n, v)
+                key   = f"H_{htype}_{scale}_{v}"
+                reg[key] = (fpath, scale)
+    return reg
+
+
+'''
+
+with open('main_alns.py', 'r', encoding='utf-8') as f:
     content = f.read()
 
-changes = 0
+# Find start and end markers
+start_marker = '# ---------------------------------------------------------------------------\n# Homberger registry'
+end_marker = '# ---------------------------------------------------------------------------\n# Combined registry'
 
-# 1. Remove TW check from greedy repair
-OLD_G = """            for pos in range(len(route) + 1):
-                if not _tw_ok_insert(inst, route, cid, pos, cmap):
-                    continue
-                cost = _insertion_cost(inst, route, cid, pos)"""
-NEW_G = """            for pos in range(len(route) + 1):
-                cost = _insertion_cost(inst, route, cid, pos)"""
-if OLD_G in content:
-    content = content.replace(OLD_G, NEW_G, 1)
-    changes += 1
+idx_start = content.find(start_marker)
+idx_end   = content.find(end_marker)
 
-# 2. Remove TW check from regret2 repair
-OLD_R = """                for pos in range(len(route) + 1):
-                    if not _tw_ok_insert(inst, route, cid, pos, cmap):
-                        continue
-                    c = _insertion_cost(inst, route, cid, pos)"""
-NEW_R = """                for pos in range(len(route) + 1):
-                    c = _insertion_cost(inst, route, cid, pos)"""
-if OLD_R in content:
-    content = content.replace(OLD_R, NEW_R, 1)
-    changes += 1
-
-# 3. Remove TW check from random repair
-OLD_RD = """            for pos in range(len(route) + 1):
-                if _tw_ok_insert(inst, route, cid, pos, cmap):
-                    feasible_slots.append((ri, pos))"""
-NEW_RD = """            for pos in range(len(route) + 1):
-                feasible_slots.append((ri, pos))"""
-if OLD_RD in content:
-    content = content.replace(OLD_RD, NEW_RD, 1)
-    changes += 1
-
-# 4. Reduce warmup_iters: n*30 -> n*10
-OLD_WU = "        warmup_iters = max(self.iterations, self.inst.n * 30)"
-NEW_WU = "        warmup_iters = max(self.iterations, self.inst.n * 10)"
-if OLD_WU in content:
-    content = content.replace(OLD_WU, NEW_WU, 1)
-    changes += 1
-
-with open('src/alns_sa.py', 'w', encoding='utf-8') as f:
-    f.write(content)
-
-print(f"Done, {changes} changes applied:")
-print("  - Removed TW check from 3 repair operators (too slow)")
-print("  - Reduced warmup_iters: n*30 -> n*10")
-print("  - Kept FEASIBILITY_TOL=50 for soft feasibility (already applied)")
+if idx_start == -1 or idx_end == -1:
+    print(f"ERROR: markers not found (start={idx_start}, end={idx_end})")
+else:
+    new_content = content[:idx_start] + NEW_HOMBERGER + content[idx_end:]
+    with open('main_alns.py', 'w', encoding='utf-8') as f:
+        f.write(new_content)
+    print(f"OK - replaced Homberger registry ({idx_end-idx_start} chars -> {len(NEW_HOMBERGER)} chars)")
+    # Quick verify
+    from importlib import import_module
+    import importlib, sys
+    if 'main_alns' in sys.modules:
+        del sys.modules['main_alns']

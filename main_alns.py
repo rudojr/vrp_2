@@ -12,16 +12,20 @@ from src.data_loader import load_instance, Instance
 from src.alns_sa     import EpsilonALNSSA, Solution, evaluate_solution
 
 
-DATA_DIR    = Path(__file__).parent / "data"
-SOLOMON_DIR = DATA_DIR / "solomon"
+DATA_DIR       = Path(__file__).parent / "data"
+SOLOMON_DIR    = DATA_DIR / "solomon"
+HOMBERGER_DIR  = DATA_DIR / "Homberger_datasets"
 
-SIZE_RANGES = {
+# ---------------------------------------------------------------------------
+# Solomon registry  (key: <TYPE><SIZE>_<ID>)
+# ---------------------------------------------------------------------------
+
+SOLOMON_SIZE_RANGES = {
     "R":  [20, 40, 60, 80, 100],
     "C":  [20, 40, 60, 80, 100],
     "RC": [20, 40, 60, 80],
 }
-
-INSTANCE_IDS = [100, 200, 300, 400, 500, 600, 700, 800]
+SOLOMON_IDS = [100, 200, 300, 400, 500, 600, 700, 800]
 
 
 def _solomon_file(instance_type: str, instance_id: int) -> Path:
@@ -30,19 +34,78 @@ def _solomon_file(instance_type: str, instance_id: int) -> Path:
     return SOLOMON_DIR / suffix
 
 
-def build_registry() -> Dict[str, Tuple[Path, int]]:
-
+def _build_solomon_registry() -> Dict[str, Tuple[Path, int]]:
     reg: Dict[str, Tuple[Path, int]] = {}
-    for itype, sizes in SIZE_RANGES.items():
+    for itype, sizes in SOLOMON_SIZE_RANGES.items():
         for size in sizes:
-            for iid in INSTANCE_IDS:
+            for iid in SOLOMON_IDS:
                 fpath = _solomon_file(itype, iid)
                 key   = f"{itype}{size}_{iid}"
                 reg[key] = (fpath, size)
     return reg
 
 
-REGISTRY = build_registry()
+# ---------------------------------------------------------------------------
+# Homberger registry
+#
+# Key format:  H_<TYPE>_<SCALE>_<VARIANT>
+#   TYPE    : C1 | C2 | R1 | R2 | RC1 | RC2
+#   SCALE   : 100 | 200 | 400 | 600 | 800  (customers to USE)
+#   VARIANT : 1 .. 10  (instance number within folder)
+#
+# Source file mapping (smallest folder that fits the scale):
+#   SCALE 100 -> homberger_200_customer_instances  (take first 100)
+#   SCALE 200 -> homberger_200_customer_instances  (use all 200)
+#   SCALE 400 -> homberger_400_customer_instances  (use all 400)
+#   SCALE 600 -> homberger_600_customer_instances  (use all 600)
+#   SCALE 800 -> homberger_800_customer_instances  (use all 800)
+#
+# Examples:
+#   H_C1_100_1  -> C1_2_1.TXT (200-cust folder), first 100 customers
+#   H_C1_200_1  -> C1_2_1.TXT (200-cust folder), all 200 customers
+#   H_R1_400_3  -> R1_4_3.TXT (400-cust folder), all 400 customers
+#   H_RC2_800_5 -> RC2_8_5.TXT (800-cust folder), all 800 customers
+# ---------------------------------------------------------------------------
+
+HOMBERGER_TYPES    = ["C1", "C2", "R1", "R2", "RC1", "RC2"]
+HOMBERGER_VARIANTS = list(range(1, 11))   # 10 instances per folder
+
+# scale -> folder_size (source file to read from)
+HOMBERGER_SCALE_TO_FOLDER = {
+    100: 200,   # take first 100 from 200-customer file
+    200: 200,   # use all 200
+    400: 400,   # use all 400
+    600: 600,   # use all 600
+    800: 800,   # use all 800
+}
+
+
+def _homberger_file(htype, folder_n, variant):
+    size_code = folder_n // 100
+    subdir    = f"homberger_{folder_n}_customer_instances"
+    filename  = f"{htype}_{size_code}_{variant}.TXT"
+    return HOMBERGER_DIR / subdir / filename
+
+
+def _build_homberger_registry():
+    reg = {}
+    for htype in HOMBERGER_TYPES:
+        for scale, folder_n in HOMBERGER_SCALE_TO_FOLDER.items():
+            for v in HOMBERGER_VARIANTS:
+                fpath = _homberger_file(htype, folder_n, v)
+                key   = f"H_{htype}_{scale}_{v}"
+                reg[key] = (fpath, scale)
+    return reg
+
+
+# ---------------------------------------------------------------------------
+# Combined registry
+# ---------------------------------------------------------------------------
+
+REGISTRY: Dict[str, Tuple[Path, int]] = {}
+REGISTRY.update(_build_solomon_registry())
+REGISTRY.update(_build_homberger_registry())
+
 
 def subset_instance(inst: Instance, n: int) -> Instance:
     from src.data_loader import Instance as Inst
@@ -247,43 +310,101 @@ def parse_args():
     parser.add_argument("--quiet", "-q", action="store_true",
                         help="Suppress per-epsilon verbose output")
 
-    parser.add_argument("--type", "-t", choices=["R", "C", "RC", "ALL"], default=None,
-                        help="Run all instances of a type (overrides --instances)")
+    parser.add_argument("--type", "-t",
+                        choices=["R", "C", "RC", "ALL",
+                                 "H_R1", "H_R2", "H_C1", "H_C2", "H_RC1", "H_RC2", "H_ALL"],
+                        default=None,
+                        help="Filter by instance type (Solomon: R/C/RC/ALL  Homberger: H_R1/H_R2/H_C1/H_C2/H_RC1/H_RC2/H_ALL)")
     parser.add_argument("--size", "-s", type=int, default=None,
-                        help="Filter by customer size when using --type")
+                        help="Filter by customer size (Solomon: 20/40/60/80/100  Homberger: 200/400/600/800)")
     parser.add_argument("--id", type=int, default=None,
-                        help="Filter by instance ID when using --type")
+                        help="Filter by instance ID (Solomon: 100-800  Homberger: 200/400/600/800 = customer count)")
+    parser.add_argument("--variant", type=int, default=None,
+                        help="Homberger only: filter by variant number 1-10 within a folder")
     return parser.parse_args()
 
 
-def _filter_registry(itype: Optional[str], size: Optional[int], iid: Optional[int]) -> List[str]:
+def _filter_registry(
+    itype:   Optional[str],
+    size:    Optional[int],
+    iid:     Optional[int],
+    variant: Optional[int] = None,
+) -> List[str]:
+    """Filter REGISTRY keys.
+
+    Solomon  key: <TYPE><SIZE>_<ID>        e.g. C80_100
+      --type  : R | C | RC | ALL
+      --size  : 20/40/60/80/100
+      --id    : 100-800
+
+    Homberger key: H_<TYPE>_<ID>_<VARIANT>  e.g. H_R1_200_1
+      --type   : H_R1 | H_R2 | H_C1 | H_C2 | H_RC1 | H_RC2 | H_ALL
+      --id     : 200 | 400 | 600 | 800  (= number of customers)
+      --variant: 1-10  (instance number within folder)
+    """
     keys = list(REGISTRY.keys())
-    if itype and itype != "ALL":
-        keys = [k for k in keys if (
-            k.startswith(itype + str(size or "")) or
-            k.startswith(itype + "_") or
-            k.startswith(itype + "2") or
-            k.startswith(itype + "4") or
-            k.startswith(itype + "6") or
-            k.startswith(itype + "8") or
-            k.startswith(itype + "1")
-        ) and (
-            k[len(itype):len(itype)+1].isdigit() or k[len(itype):len(itype)+1] == ""
-        )]
+
+    if not itype or itype == "ALL":
+        # Keep only Solomon keys
+        keys = [k for k in keys if not k.startswith("H_")]
+    elif itype == "H_ALL":
+        keys = [k for k in keys if k.startswith("H_")]
+    elif itype.startswith("H_"):
+        # Homberger filter: key starts with "H_<TYPE>_"
+        prefix = itype + "_"
+        keys = [k for k in keys if k.startswith(prefix)]
+    else:
+        # Solomon filter: key starts with <TYPE><digit>
+        # Avoid RC matching R: check that first char after TYPE is a digit
+        keys = [
+            k for k in keys
+            if k.startswith(itype)
+            and not k.startswith("H_")
+            and len(k) > len(itype)
+            and k[len(itype)].isdigit()
+        ]
+
     if size is not None:
-        keys = [k for k in keys if k.split("_")[0].endswith(str(size))]
+        # Solomon: key[:-4] ends with str(size)  e.g. "C80" in "C80_100"
+        # Homberger: second segment is size  e.g. "200" in "H_R1_200_1"
+        def _matches_size(k):
+            if k.startswith("H_"):
+                parts = k.split("_")  # ["H", "R1", "200", "1"]
+                return len(parts) >= 3 and parts[2] == str(size)
+            else:
+                return k.split("_")[0].endswith(str(size))
+        keys = [k for k in keys if _matches_size(k)]
+
+    # Homberger --id filters by customer count (200/400/600/800)
+    # Homberger --variant filters by instance number (1-10)
     if iid is not None:
-        keys = [k for k in keys if k.endswith(f"_{iid}")]
+        def _matches_id(k):
+            if k.startswith("H_"):
+                parts = k.split("_")           # H, TYPE, ID, VARIANT
+                return len(parts) >= 3 and parts[2] == str(iid)
+            else:
+                return k.endswith(f"_{iid}")
+        keys = [k for k in keys if _matches_id(k)]
+
+    if variant is not None:
+        # Only applies to Homberger keys (ends with _<variant>)
+        keys = [k for k in keys if k.startswith("H_") and k.endswith(f"_{variant}")]
+
     return sorted(keys)
+
 
 
 if __name__ == "__main__":
     args = parse_args()
 
     if args.type:
-        instance_keys = _filter_registry(args.type, args.size, args.id)
+        instance_keys = _filter_registry(
+            args.type, args.size, args.id, getattr(args, 'variant', None)
+        )
         if not instance_keys:
-            print("[ERROR] No instances matched --type/--size/--id filters.")
+            print("[ERROR] No instances matched filters.")
+            print("  Solomon --type: R/C/RC/ALL  --size: 20-100  --id: 100-800")
+            print("  Homberger --type: H_R1/H_C1/...  --id: 200/400/600/800  --variant: 1-10")
             sys.exit(1)
     else:
         instance_keys = args.instances
