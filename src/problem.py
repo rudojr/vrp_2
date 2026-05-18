@@ -84,8 +84,7 @@ class RouteEval:
         inst      = self.inst
         depot     = inst.depot
         cap       = inst.vehicle_capacity
-        customers = {c.id: c for c in inst.customers}
-        customers[0] = depot
+        customers = inst.cmap
 
         cost        = 0.0
         travel_time = 0.0
@@ -109,7 +108,7 @@ class RouteEval:
 
         for cid in route:
             c    = customers[cid]
-            dist = euclidean(prev, c)
+            dist = inst.dist_matrix[prev.id][c.id]
             tt   = travel_time_tv(dist, t)
             seg_cost = transport_cost_segment(dist, load, cap)
 
@@ -145,7 +144,7 @@ class RouteEval:
             prev = c
 
         # Return to depot
-        dist = euclidean(prev, depot)
+        dist = inst.dist_matrix[prev.id][depot.id]
         tt   = travel_time_tv(dist, t)
         cost += transport_cost_segment(dist, load, cap)
         travel_time += tt

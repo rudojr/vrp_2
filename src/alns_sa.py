@@ -59,8 +59,7 @@ def _insertion_cost(
     cid: int,
     pos: int,
 ) -> float:
-    cmap = {c.id: c for c in inst.customers}
-    cmap[0] = inst.depot
+    cmap = inst.cmap
 
     prev_id = 0 if pos == 0 else route[pos - 1]
     next_id = 0 if pos == len(route) else route[pos]
@@ -69,26 +68,27 @@ def _insertion_cost(
     cust = cmap[cid]
     nxt  = cmap[next_id]
 
-    d_remove = euclidean(prev, nxt)
-    d_add    = euclidean(prev, cust) + euclidean(cust, nxt)
+    d_remove = inst.dist_matrix[prev.id][nxt.id]
+    d_add    = inst.dist_matrix[prev.id][cust.id] + inst.dist_matrix[cust.id][nxt.id]
     cap      = inst.vehicle_capacity
 
     load_approx = sum(cmap[c].demand for c in route) + cust.demand
+    
+    if not _tw_ok_insert(inst, route, cid, pos, cmap):
+        return float('inf')
+
     return transport_cost_segment(d_add - d_remove, load_approx, cap)
 
 
 
 def _route_arrival_at_pos(inst, route, pos, cmap):
-    """Estimate arrival time at position `pos` in route (before inserting new cust).
-    Returns the approximate time the vehicle arrives at route[pos] (or end-of-route
-    if pos==len(route)).  Fast O(pos) estimate."""
     from src.problem import travel_time_tv, euclidean, SERVICE_TIME_DEFAULT
     depot = inst.depot
     t = 0.0
     prev = depot
     for i in range(min(pos, len(route))):
         c = cmap[route[i]]
-        dist = euclidean(prev, c)
+        dist = inst.dist_matrix[prev.id][c.id]
         t += travel_time_tv(dist, t)
         # service + best-wait at earliest TW
         svc = c.service_time if c.service_time > 0 else SERVICE_TIME_DEFAULT
@@ -103,28 +103,52 @@ def _route_arrival_at_pos(inst, route, pos, cmap):
 
 
 def _tw_ok_insert(inst, route, cid, pos, cmap):
-    """Return True if inserting `cid` at `pos` can satisfy at least one TW.
-    Uses a fast arrival-time estimate (ignores downstream shifts)."""
-    from src.problem import travel_time_tv, euclidean
-    t_at_pos = _route_arrival_at_pos(inst, route, pos, cmap)
-    prev_id  = 0 if pos == 0 else route[pos - 1]
-    prev = cmap[prev_id]
-    c    = cmap[cid]
-    dist = euclidean(prev, c)
-    from src.problem import travel_time_tv
-    arr  = t_at_pos + travel_time_tv(dist, t_at_pos)
-    return any(arr <= dt for (_, dt) in c.time_windows)
+    """Return True if inserting `cid` at `pos` keeps the entire route TW-feasible."""
+    from src.problem import travel_time_tv, SERVICE_TIME_DEFAULT
+    depot = inst.depot
+    new_route = route[:pos] + [cid] + route[pos:]
+    
+    t = 0.0
+    prev = depot
+    
+    for c_id in new_route:
+        c = cmap[c_id]
+        dist = inst.dist_matrix[prev.id][c.id]
+        t += travel_time_tv(dist, t)
+        
+        svc = c.service_time if c.service_time > 0 else SERVICE_TIME_DEFAULT
+        
+        feasible = False
+        best_wait = float('inf')
+        
+        for (rt, dt) in c.time_windows:
+            wait = max(0.0, rt - t)
+            if t <= dt:
+                feasible = True
+                best_wait = wait
+                break
+                
+        if not feasible:
+            return False
+            
+        t += best_wait + svc
+        prev = c
+        
+    dist = inst.dist_matrix[prev.id][depot.id]
+    t += travel_time_tv(dist, t)
+    depot_due = depot.time_windows[-1][1] if depot.time_windows else 960.0
+    if t > depot_due:
+        return False
+        
+    return True
 
 
 def build_initial_solution(inst, seed=42):
-    """Each customer in its own route so ALNS starts feasible w.r.t. capacity.
-    SA/ALNS will merge routes while satisfying time windows.
-    """
     routes = [[c.id] for c in inst.customers]
     return Solution(routes)
 
+
 def destroy_random(sol: Solution, n_remove: int, rng: random.Random) -> Tuple[Solution, List[int]]:
-    """Remove n_remove random customers."""
     s       = sol.copy()
     removed = []
     all_c   = s.all_customers()
@@ -145,8 +169,7 @@ def destroy_random(sol: Solution, n_remove: int, rng: random.Random) -> Tuple[So
 def destroy_worst_cost(
     sol: Solution, n_remove: int, inst: Instance, rng: random.Random
 ) -> Tuple[Solution, List[int]]:
-    cmap  = {c.id: c for c in inst.customers}
-    cmap[0] = inst.depot
+    cmap = inst.cmap
     cap   = inst.vehicle_capacity
 
     marginals: List[Tuple[float, int]] = []
@@ -158,8 +181,8 @@ def destroy_worst_cost(
             prev = cmap[prev_id]
             c    = cmap[cid]
             nxt  = cmap[next_id]
-            d_with    = euclidean(prev, c) + euclidean(c, nxt)
-            d_without = euclidean(prev, nxt)
+            d_with    = inst.dist_matrix[prev.id][c.id] + inst.dist_matrix[c.id][nxt.id]
+            d_without = inst.dist_matrix[prev.id][nxt.id]
             saving    = transport_cost_segment(d_with - d_without, load, cap)
             noise     = rng.uniform(0.9, 1.1)   
             marginals.append((saving * noise, cid))
@@ -190,7 +213,7 @@ def destroy_tw_violation(
     for route in sol.routes:
         result = re.evaluate_route(route, return_details=True)
         arrivals = result["arrival_times"]
-        cmap = {c.id: c for c in inst.customers}
+        cmap = inst.cmap
 
         for i, cid in enumerate(route):
             c = cmap.get(cid)
@@ -227,7 +250,7 @@ def destroy_tw_violation(
 def destroy_cluster(
     sol: Solution, n_remove: int, inst: Instance, rng: random.Random
 ) -> Tuple[Solution, List[int]]:
-    cmap = {c.id: c for c in inst.customers}
+    cmap = inst.cmap
     all_c = sol.all_customers()
     if not all_c:
         return sol.copy(), []
@@ -237,7 +260,7 @@ def destroy_cluster(
 
     def similarity(cid: int) -> float:
         c = cmap[cid]
-        dist   = euclidean(seed_c, c)
+        dist   = inst.dist_matrix[seed_c.id][c.id]
         tw_sim = abs(seed_c.ready_time - c.ready_time)
         return dist + 0.3 * tw_sim
 
@@ -266,8 +289,7 @@ def repair_greedy_insert(
     sol: Solution, removed: List[int], inst: Instance, rng: random.Random
 ) -> Solution:
     s    = sol.copy()
-    cmap = {c.id: c for c in inst.customers}
-    cmap[0] = inst.depot
+    cmap = inst.cmap
     cap  = inst.vehicle_capacity
 
     order = removed[:]
@@ -304,8 +326,7 @@ def repair_regret2_insert(
     sol: Solution, removed: List[int], inst: Instance, rng: random.Random
 ) -> Solution:
     s    = sol.copy()
-    cmap = {c.id: c for c in inst.customers}
-    cmap[0] = inst.depot
+    cmap = inst.cmap
     cap  = inst.vehicle_capacity
 
     unrouted = removed[:]
@@ -351,8 +372,7 @@ def repair_random_insert(
     sol: Solution, removed: List[int], inst: Instance, rng: random.Random
 ) -> Solution:
     s    = sol.copy()
-    cmap = {c.id: c for c in inst.customers}
-    cmap[0] = inst.depot
+    cmap = inst.cmap
     cap  = inst.vehicle_capacity
 
     order = removed[:]
@@ -611,13 +631,16 @@ class EpsilonALNSSA:
             print(f'  Initial: NV={init_sol.NV}  TC={init_sol.TC:.2f}  '
                   f'TT={init_sol.TT:.2f}  feasible={init_sol.feasible}')
 
-        warmup_iters = max(self.iterations, self.inst.n * 10)
+        warmup_iters = self.iterations
         if self.verbose:
             print(f'  Warmup ({warmup_iters} iters) ...', end=' ', flush=True)
 
+        original_iters = self.iterations
+        self.iterations = warmup_iters
         warmup_sol, _ = self._run_alns_sa(
             init_sol, nv_limit=999, history=[], t_start=t_start
         )
+        self.iterations = original_iters
         if self.verbose:
             print(f'feasible={warmup_sol.feasible}  '
                   f'NV={warmup_sol.NV}  TC={warmup_sol.TC:.2f}')

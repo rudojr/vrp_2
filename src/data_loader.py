@@ -41,6 +41,31 @@ class Instance:
     def n(self) -> int:
         return len(self.customers)
 
+    @property
+    def cmap(self) -> dict:
+        if not hasattr(self, '_cmap'):
+            self._cmap = {c.id: c for c in self.customers}
+            self._cmap[0] = self.depot
+        return self._cmap
+
+    @property
+    def dist_matrix(self) -> List[List[float]]:
+        if not hasattr(self, '_dist_matrix'):
+            import math
+            n = len(self.customers)
+            # Find max id to size the matrix correctly
+            max_id = max(c.id for c in self.customers)
+            max_id = max(max_id, self.depot.id)
+            
+            mat = [[0.0] * (max_id + 1) for _ in range(max_id + 1)]
+            nodes = [self.depot] + self.customers
+            for a in nodes:
+                for b in nodes:
+                    if a.id != b.id:
+                        mat[a.id][b.id] = math.sqrt((a.x - b.x)**2 + (a.y - b.y)**2)
+            self._dist_matrix = mat
+        return self._dist_matrix
+
 def load_solomon(filepath: str) -> Instance:
     name = os.path.splitext(os.path.basename(filepath))[0]
     customers: List[Customer] = []
